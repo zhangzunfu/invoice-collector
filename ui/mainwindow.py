@@ -18,6 +18,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import threading
 import time
+from openpyxl.styles import Font as ExcelFont, Alignment, PatternFill, Border, Side
 
 from data_processing.invoice_parser import InvoiceProcessor
 
@@ -1379,8 +1380,385 @@ class MainWindow(QMainWindow):
             self.invoice_table.setItem(row, 8, QTableWidgetItem(str(invoice.get('价税合计', ''))))
             self.invoice_table.setItem(row, 9, QTableWidgetItem(invoice.get('发票类型', '')))
     
+    def _analyze_data(self, ws):
+        """分析Sheet1数据结构"""
+        # 获取数据范围
+        max_row = ws.max_row
+        max_col = ws.max_column
+        
+        # 获取列标题
+        headers = [ws.cell(1, c).value for c in range(1, max_col + 1)]
+        
+        # 查找关键列索引
+        col_map = {}
+        for i, h in enumerate(headers, 1):
+            if h and isinstance(h, str):
+                col_map[h.strip()] = i
+        
+        return {
+            'max_row': max_row,
+            'max_col': max_col,
+            'headers': headers,
+            'col_map': col_map
+        }
+    
+    def _get_unique_values(self, ws, col_idx, start_row, end_row):
+        """获取某列的唯一值列表"""
+        values = {}
+        for r in range(start_row, end_row + 1):
+            v = ws.cell(r, col_idx).value
+            if v:
+                values[str(v).strip()] = values.get(str(v).strip(), 0) + 1
+        return list(values.keys())
+    
+    def _get_top_sellers(self, ws, col_idx, amt_col_idx, start_row, end_row, top_n=10):
+        """获取销方TOP N"""
+        seller_amts = {}
+        for r in range(start_row, end_row + 1):
+            seller = ws.cell(r, col_idx).value
+            amt = ws.cell(r, amt_col_idx).value
+            if seller and amt:
+                seller = str(seller).strip()
+                try:
+                    amt = float(amt)
+                except:
+                    amt = 0
+                seller_amts[seller] = seller_amts.get(seller, 0) + amt
+        
+        # 排序取TOP N
+        sorted_sellers = sorted(seller_amts.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        return [s[0] for s in sorted_sellers]
+    
+    def _convert_numeric_columns(self, wb, data_info):
+        """确保金额/税额/价税合计为数值类型"""
+        ws = wb['Sheet1']
+        max_row = data_info['max_row']
+        col_map = data_info['col_map']
+        
+        for col_name in ['金额', '税额', '价税合计']:
+            col_idx = col_map.get(col_name)
+            if col_idx:
+                for r in range(2, max_row + 1):
+                    val = ws.cell(r, col_idx).value
+                    if isinstance(val, str):
+                        try:
+                            ws.cell(r, col_idx).value = float(val.strip())
+                        except:
+                            pass
+    
+    def _create_dashboard(self, wb, data_info):
+        """创建动态仪表盘"""
+        ws = wb.create_sheet('动态仪表盘')
+        
+        max_row = data_info['max_row']
+        col_map = data_info['col_map']
+        ws1 = wb['Sheet1']
+        
+        # 获取列索引（现在包含年份和月份字段）
+        date_col = col_map.get('开票日期', 1)
+        invoice_col = col_map.get('发票号码', 2)
+        buyer_col = col_map.get('购方名称', 3)
+        seller_col = col_map.get('销方名称', 4)
+        item_col = col_map.get('项目名称', 5)
+        rate_col = col_map.get('税率', 6)
+        amt_col = col_map.get('金额', 7)
+        tax_col = col_map.get('税额', 8)
+        total_col = col_map.get('价税合计', 9)
+        type_col = col_map.get('发票类型', 10)
+        year_col = col_map.get('年份', 11)
+        month_col = col_map.get('月份', 12)
+        
+        # 样式定义
+        title_font = ExcelFont(name='微软雅黑', size=16, bold=True, color='FFFFFF')
+        header_font = ExcelFont(name='微软雅黑', size=11, bold=True)
+        kpi_font = ExcelFont(name='微软雅黑', size=14, bold=True, color='2F5496')
+        normal_font = ExcelFont(name='微软雅黑', size=10)
+        
+        title_fill = PatternFill(start_color='2F5496', end_color='2F5496', fill_type='solid')
+        header_fill = PatternFill(start_color='D6DCE5', end_color='D6DCE5', fill_type='solid')
+        kpi_fill = PatternFill(start_color='E2EFDA', end_color='E2EFDA', fill_type='solid')
+        
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        center_align = Alignment(horizontal='center', vertical='center')
+        left_align = Alignment(horizontal='left', vertical='center')
+        
+        # ========== 1. 标题 ==========
+        ws.merge_cells('A1:L1')
+        ws['A1'] = '📊 发票数据动态仪表盘'
+        ws['A1'].font = title_font
+        ws['A1'].fill = title_fill
+        ws['A1'].alignment = center_align
+        ws.row_dimensions[1].height = 35
+        
+        # ========== 2. KPI 指标卡 ==========
+        kpi_items = [
+            ('B', '💰 总价税合计', f'=SUM(Sheet1!${chr(64+total_col)}$2:${chr(64+total_col)}${max_row})'),
+            ('D', '💵 发票总金额', f'=SUM(Sheet1!${chr(64+amt_col)}$2:${chr(64+amt_col)}${max_row})'),
+            ('F', '🧾 税额合计', f'=SUM(Sheet1!${chr(64+tax_col)}$2:${chr(64+tax_col)}${max_row})'),
+            ('H', '📋 发票张数', f'=COUNTA(Sheet1!${chr(64+invoice_col)}$2:${chr(64+invoice_col)}${max_row})'),
+            ('J', '🏢 供应商数', f'=SUMPRODUCT(1/COUNTIF(Sheet1!${chr(64+seller_col)}$2:${chr(64+seller_col)}${max_row},Sheet1!${chr(64+seller_col)}$2:${chr(64+seller_col)}${max_row}))'),
+            ('L', '📦 项目品类', f'=SUMPRODUCT(1/COUNTIF(Sheet1!${chr(64+item_col)}$2:${chr(64+item_col)}${max_row},Sheet1!${chr(64+item_col)}$2:${chr(64+item_col)}${max_row}))'),
+        ]
+        
+        for col, label, formula in kpi_items:
+            ws[f'{col}3'] = label
+            ws[f'{col}3'].font = header_font
+            ws[f'{col}3'].fill = header_fill
+            ws[f'{col}3'].alignment = center_align
+            ws[f'{col}3'].border = thin_border
+            
+            ws[f'{col}5'] = formula
+            ws[f'{col}5'].font = ExcelFont(name='微软雅黑', size=10, bold=True, color='2F5496')
+            ws[f'{col}5'].fill = kpi_fill
+            ws[f'{col}5'].alignment = center_align
+            ws[f'{col}5'].border = thin_border
+            if col in ['B', 'D', 'F']:
+                ws[f'{col}5'].number_format = '#,##0'
+            else:
+                ws[f'{col}5'].number_format = '0'
+        
+        ws.row_dimensions[3].height = 22
+        ws.row_dimensions[5].height = 28
+        
+        # ========== 3. 月度趋势分析 ==========
+        ws['B7'] = '📈 月度趋势分析'
+        ws['B7'].font = ExcelFont(name='微软雅黑', size=12, bold=True, color='2F5496')
+        
+        month_headers = ['月份', '发票张数', '金额', '税额', '价税合计', '环比增幅']
+        for i, h in enumerate(month_headers):
+            cell = ws.cell(row=9, column=2+i)
+            cell.value = h
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+            cell.border = thin_border
+        
+        # 获取所有年月
+        year_month_data = {}
+        for r in range(2, max_row + 1):
+            date_val = ws1.cell(r, date_col).value
+            if date_val:
+                try:
+                    if isinstance(date_val, str):
+                        dt = datetime.strptime(date_val.split()[0], '%Y-%m-%d')
+                    else:
+                        dt = date_val
+                    ym = (dt.year, dt.month)
+                    year_month_data[ym] = True
+                except:
+                    pass
+        
+        sorted_ym = sorted(year_month_data.keys())
+        
+        # 写入月度数据
+        row_idx = 10
+        for year, month in sorted_ym:
+            ws.cell(row=row_idx, column=2).value = f'{year}-{month:02d}'
+            ws.cell(row=row_idx, column=2).alignment = center_align
+            ws.cell(row=row_idx, column=2).border = thin_border
+            
+            ws.cell(row=row_idx, column=3).value = f'=SUMPRODUCT((Sheet1!${chr(64+year_col)}$2:${chr(64+year_col)}${max_row}={year})*(Sheet1!${chr(64+month_col)}$2:${chr(64+month_col)}${max_row}={month}))'
+            ws.cell(row=row_idx, column=3).alignment = center_align
+            ws.cell(row=row_idx, column=3).border = thin_border
+            
+            ws.cell(row=row_idx, column=4).value = f'=SUMIFS(Sheet1!${chr(64+amt_col)}$2:${chr(64+amt_col)}${max_row},Sheet1!${chr(64+year_col)}$2:${chr(64+year_col)}${max_row},{year},Sheet1!${chr(64+month_col)}$2:${chr(64+month_col)}${max_row},{month})'
+            ws.cell(row=row_idx, column=4).number_format = '#,##0'
+            ws.cell(row=row_idx, column=4).alignment = center_align
+            ws.cell(row=row_idx, column=4).border = thin_border
+            
+            ws.cell(row=row_idx, column=5).value = f'=SUMIFS(Sheet1!${chr(64+tax_col)}$2:${chr(64+tax_col)}${max_row},Sheet1!${chr(64+year_col)}$2:${chr(64+year_col)}${max_row},{year},Sheet1!${chr(64+month_col)}$2:${chr(64+month_col)}${max_row},{month})'
+            ws.cell(row=row_idx, column=5).number_format = '#,##0'
+            ws.cell(row=row_idx, column=5).alignment = center_align
+            ws.cell(row=row_idx, column=5).border = thin_border
+            
+            ws.cell(row=row_idx, column=6).value = f'=SUMIFS(Sheet1!${chr(64+total_col)}$2:${chr(64+total_col)}${max_row},Sheet1!${chr(64+year_col)}$2:${chr(64+year_col)}${max_row},{year},Sheet1!${chr(64+month_col)}$2:${chr(64+month_col)}${max_row},{month})'
+            ws.cell(row=row_idx, column=6).number_format = '#,##0'
+            ws.cell(row=row_idx, column=6).alignment = center_align
+            ws.cell(row=row_idx, column=6).border = thin_border
+            
+            if row_idx > 10:
+                ws.cell(row=row_idx, column=7).value = f'=IF(F{row_idx-1}=0,"-",F{row_idx}/F{row_idx-1}-1)'
+            else:
+                ws.cell(row=row_idx, column=7).value = '-'
+            ws.cell(row=row_idx, column=7).number_format = '0.0%'
+            ws.cell(row=row_idx, column=7).alignment = center_align
+            ws.cell(row=row_idx, column=7).border = thin_border
+            
+            row_idx += 1
+        
+        # 合计行
+        total_row = row_idx
+        ws.cell(row=total_row, column=2).value = '合计'
+        ws.cell(row=total_row, column=2).font = header_font
+        ws.cell(row=total_row, column=2).fill = header_fill
+        ws.cell(row=total_row, column=2).alignment = center_align
+        ws.cell(row=total_row, column=2).border = thin_border
+        
+        for col in range(3, 7):
+            ws.cell(row=total_row, column=col).value = f'=SUM({chr(64+col)}10:{chr(64+col)}{total_row-1})'
+            ws.cell(row=total_row, column=col).font = header_font
+            ws.cell(row=total_row, column=col).fill = header_fill
+            ws.cell(row=total_row, column=col).alignment = center_align
+            ws.cell(row=total_row, column=col).border = thin_border
+            if col >= 4:
+                ws.cell(row=total_row, column=col).number_format = '#,##0'
+        
+        ws.cell(row=total_row, column=7).value = '-'
+        ws.cell(row=total_row, column=7).font = header_font
+        ws.cell(row=total_row, column=7).fill = header_fill
+        ws.cell(row=total_row, column=7).alignment = center_align
+        ws.cell(row=total_row, column=7).border = thin_border
+        
+        # ========== 4. 购方分析 ==========
+        section_start = total_row + 3
+        
+        ws[f'B{section_start}'] = '🏢 购方分析'
+        ws[f'B{section_start}'].font = ExcelFont(name='微软雅黑', size=12, bold=True, color='2F5496')
+        
+        buyers = self._get_unique_values(ws1, buyer_col, 2, max_row)
+        
+        for i, h in enumerate(['购方名称', '金额', '占比']):
+            cell = ws.cell(row=section_start+1, column=2+i)
+            cell.value = h
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+            cell.border = thin_border
+        
+        for idx, buyer in enumerate(buyers):
+            r = section_start + 2 + idx
+            ws.cell(row=r, column=2).value = buyer
+            ws.cell(row=r, column=2).alignment = left_align
+            ws.cell(row=r, column=2).border = thin_border
+            
+            ws.cell(row=r, column=3).value = f'=SUMIF(Sheet1!${chr(64+buyer_col)}$2:${chr(64+buyer_col)}${max_row},B{r},Sheet1!${chr(64+total_col)}$2:${chr(64+total_col)}${max_row})'
+            ws.cell(row=r, column=3).number_format = '#,##0'
+            ws.cell(row=r, column=3).alignment = center_align
+            ws.cell(row=r, column=3).border = thin_border
+            
+            ws.cell(row=r, column=4).value = f'=C{r}/$B$5'
+            ws.cell(row=r, column=4).number_format = '0.0%'
+            ws.cell(row=r, column=4).alignment = center_align
+            ws.cell(row=r, column=4).border = thin_border
+        
+        # ========== 5. 销方TOP10 ==========
+        ws[f'G{section_start}'] = '🛒 销方 TOP10'
+        ws[f'G{section_start}'].font = ExcelFont(name='微软雅黑', size=12, bold=True, color='2F5496')
+        
+        sellers = self._get_top_sellers(ws1, seller_col, total_col, 2, max_row, 10)
+        
+        for i, h in enumerate(['销方名称', '金额', '占比']):
+            cell = ws.cell(row=section_start+1, column=7+i)
+            cell.value = h
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+            cell.border = thin_border
+        
+        for idx, seller in enumerate(sellers):
+            r = section_start + 2 + idx
+            ws.cell(row=r, column=7).value = seller
+            ws.cell(row=r, column=7).alignment = left_align
+            ws.cell(row=r, column=7).border = thin_border
+            
+            ws.cell(row=r, column=8).value = f'=SUMIF(Sheet1!${chr(64+seller_col)}$2:${chr(64+seller_col)}${max_row},G{r},Sheet1!${chr(64+total_col)}$2:${chr(64+total_col)}${max_row})'
+            ws.cell(row=r, column=8).number_format = '#,##0'
+            ws.cell(row=r, column=8).alignment = center_align
+            ws.cell(row=r, column=8).border = thin_border
+            
+            ws.cell(row=r, column=9).value = f'=H{r}/$B$5'
+            ws.cell(row=r, column=9).number_format = '0.0%'
+            ws.cell(row=r, column=9).alignment = center_align
+            ws.cell(row=r, column=9).border = thin_border
+        
+        # ========== 6. 税率分布 ==========
+        max_partner_rows = max(len(buyers), len(sellers))
+        rate_section = section_start + max_partner_rows + 4
+        
+        ws[f'B{rate_section}'] = '📊 税率分布'
+        ws[f'B{rate_section}'].font = ExcelFont(name='微软雅黑', size=12, bold=True, color='2F5496')
+        
+        rates = self._get_unique_values(ws1, rate_col, 2, max_row)
+        
+        for i, h in enumerate(['税率', '金额', '占比']):
+            cell = ws.cell(row=rate_section+1, column=2+i)
+            cell.value = h
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+            cell.border = thin_border
+        
+        for idx, rate in enumerate(rates):
+            r = rate_section + 2 + idx
+            ws.cell(row=r, column=2).value = rate
+            ws.cell(row=r, column=2).alignment = center_align
+            ws.cell(row=r, column=2).border = thin_border
+            
+            ws.cell(row=r, column=3).value = f'=SUMIF(Sheet1!${chr(64+rate_col)}$2:${chr(64+rate_col)}${max_row},B{r},Sheet1!${chr(64+total_col)}$2:${chr(64+total_col)}${max_row})'
+            ws.cell(row=r, column=3).number_format = '#,##0'
+            ws.cell(row=r, column=3).alignment = center_align
+            ws.cell(row=r, column=3).border = thin_border
+            
+            ws.cell(row=r, column=4).value = f'=C{r}/$B$5'
+            ws.cell(row=r, column=4).number_format = '0.0%'
+            ws.cell(row=r, column=4).alignment = center_align
+            ws.cell(row=r, column=4).border = thin_border
+        
+        # ========== 7. 发票类型 ==========
+        ws[f'G{rate_section}'] = '📋 发票类型'
+        ws[f'G{rate_section}'].font = ExcelFont(name='微软雅黑', size=12, bold=True, color='2F5496')
+        
+        types = self._get_unique_values(ws1, type_col, 2, max_row)
+        
+        for i, h in enumerate(['发票类型', '金额', '占比']):
+            cell = ws.cell(row=rate_section+1, column=7+i)
+            cell.value = h
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+            cell.border = thin_border
+        
+        for idx, inv_type in enumerate(types):
+            r = rate_section + 2 + idx
+            ws.cell(row=r, column=7).value = inv_type
+            ws.cell(row=r, column=7).alignment = center_align
+            ws.cell(row=r, column=7).border = thin_border
+            
+            ws.cell(row=r, column=8).value = f'=SUMIF(Sheet1!${chr(64+type_col)}$2:${chr(64+type_col)}${max_row},G{r},Sheet1!${chr(64+total_col)}$2:${chr(64+total_col)}${max_row})'
+            ws.cell(row=r, column=8).number_format = '#,##0'
+            ws.cell(row=r, column=8).alignment = center_align
+            ws.cell(row=r, column=8).border = thin_border
+            
+            ws.cell(row=r, column=9).value = f'=H{r}/$B$5'
+            ws.cell(row=r, column=9).number_format = '0.0%'
+            ws.cell(row=r, column=9).alignment = center_align
+            ws.cell(row=r, column=9).border = thin_border
+        
+        # ========== 设置列宽和字体 ==========
+        ws.column_dimensions['A'].width = 3
+        ws.column_dimensions['B'].width = 32
+        ws.column_dimensions['C'].width = 14
+        ws.column_dimensions['D'].width = 16
+        ws.column_dimensions['E'].width = 14
+        ws.column_dimensions['F'].width = 16
+        ws.column_dimensions['G'].width = 32
+        ws.column_dimensions['H'].width = 16
+        ws.column_dimensions['I'].width = 12
+        ws.column_dimensions['J'].width = 14
+        ws.column_dimensions['K'].width = 3
+        ws.column_dimensions['L'].width = 14
+        
+        for row in range(1, 50):
+            ws.row_dimensions[row].height = 18
+    
     def export_to_excel(self):
-        """导出到Excel - 优化版，支持固定列宽"""
+        """导出到Excel - 优化版，支持固定列宽，自动生成仪表盘，包含年份和月份字段"""
         if self.current_invoices:
             file_path, _ = QFileDialog.getSaveFileName(
                 self, 
@@ -1391,8 +1769,8 @@ class MainWindow(QMainWindow):
             
             if file_path:
                 try:
-                    # 定义字段顺序，与GUI表格显示顺序一致
-                    column_order = ['开票日期', '发票号码', '购方名称', '销方名称', '项目名称', '税率', '金额', '税额', '价税合计', '发票类型']
+                    # 定义字段顺序，添加年份和月份字段
+                    column_order = ['开票日期', '发票号码', '购方名称', '销方名称', '项目名称', '税率', '金额', '税额', '价税合计', '发票类型', '年份', '月份']
                     
                     # 确保每张发票都有所有字段，缺失的字段使用默认值
                     for invoice in self.current_invoices:
@@ -1402,8 +1780,24 @@ class MainWindow(QMainWindow):
                                     invoice[col] = '0.00'
                                 elif col == '税率':
                                     invoice[col] = '0.00%'
+                                elif col in ['年份', '月份']:
+                                    invoice[col] = 0
                                 else:
                                     invoice[col] = '未识别'
+                        
+                        # 从开票日期提取年份和月份
+                        date_str = invoice.get('开票日期', '')
+                        if date_str and date_str != '未识别':
+                            try:
+                                if '年' in date_str:
+                                    dt = datetime.strptime(date_str, '%Y年%m月%d日')
+                                else:
+                                    dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                invoice['年份'] = dt.year
+                                invoice['月份'] = dt.month
+                            except:
+                                invoice['年份'] = 0
+                                invoice['月份'] = 0
                     
                     # 创建DataFrame并按指定顺序排列字段
                     df = pd.DataFrame(self.current_invoices, columns=column_order)
@@ -1413,7 +1807,6 @@ class MainWindow(QMainWindow):
                     
                     # 使用openpyxl导出并设置格式
                     from openpyxl import load_workbook
-                    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
                     from openpyxl.utils import get_column_letter
                     
                     # 先使用pandas导出
@@ -1423,7 +1816,7 @@ class MainWindow(QMainWindow):
                     wb = load_workbook(file_path)
                     ws = wb.active
                     
-                    # 定义列宽（与模板保持一致）
+                    # 定义列宽（包含年份和月份字段）
                     column_widths = {
                         'A': 15,  # 开票日期
                         'B': 25,  # 发票号码
@@ -1434,7 +1827,9 @@ class MainWindow(QMainWindow):
                         'G': 12,  # 金额
                         'H': 12,  # 税额
                         'I': 15,  # 价税合计
-                        'J': 15   # 发票类型
+                        'J': 15,  # 发票类型
+                        'K': 10,  # 年份
+                        'L': 10   # 月份
                     }
                     
                     # 设置列宽
@@ -1442,7 +1837,7 @@ class MainWindow(QMainWindow):
                         ws.column_dimensions[col].width = width
                     
                     # 设置表头样式
-                    header_font = Font(name='微软雅黑', size=11, bold=True, color='FFFFFF')
+                    header_font = ExcelFont(name='微软雅黑', size=11, bold=True, color='FFFFFF')
                     header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
                     header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
                     thin_border = Border(
@@ -1460,23 +1855,38 @@ class MainWindow(QMainWindow):
                         cell.border = thin_border
                     
                     # 设置数据行样式
-                    data_font = Font(name='微软雅黑', size=10)
+                    data_font = ExcelFont(name='微软雅黑', size=10)
                     data_alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
                     
-                    # 金额、税额、价税合计列右对齐
+                    # 金额、税额、价税合计、年份、月份列居中对齐
                     for row in ws.iter_rows(min_row=2):
                         for idx, cell in enumerate(row, 1):
                             cell.font = data_font
                             cell.border = thin_border
                             
                             # 第7、8、9列（税率、金额、税额）和第10列（价税合计）右对齐
+                            # 第11、12列（年份、月份）居中对齐
                             if idx in [6, 7, 8, 9]:
                                 cell.alignment = Alignment(horizontal='right', vertical='center')
+                            elif idx in [10, 11]:
+                                cell.alignment = Alignment(horizontal='center', vertical='center')
                             else:
                                 cell.alignment = data_alignment
                     
                     # 冻结首行
                     ws.freeze_panes = 'A2'
+                    
+                    # 生成智能仪表盘
+                    self.log_message("正在生成智能仪表盘...")
+                    
+                    # 分析数据
+                    data_info = self._analyze_data(ws)
+                    
+                    # 转换数值列
+                    self._convert_numeric_columns(wb, data_info)
+                    
+                    # 创建仪表盘（不再添加辅助列，因为年份和月份已经在数据中）
+                    self._create_dashboard(wb, data_info)
                     
                     # 保存工作簿
                     wb.save(file_path)
@@ -1485,14 +1895,16 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(
                         self, 
                         "导出成功", 
-                        f"发票清单已成功导出到:\n{file_path}\n\n共 {len(self.current_invoices)} 张发票"
+                        f"发票清单已成功导出到:\n{file_path}\n\n共 {len(self.current_invoices)} 张发票\n\n已自动生成智能仪表盘（动态仪表盘工作表）"
                     )
                 except Exception as e:
-                    self.log_message(f"导出失败: {str(e)}")
+                    import traceback
+                    error_msg = f"导出失败: {str(e)}\n\n详细错误:\n{traceback.format_exc()}"
+                    self.log_message(error_msg)
                     QMessageBox.critical(
                         self, 
                         "导出失败", 
-                        f"导出失败:\n{str(e)}"
+                        error_msg
                     )
     
     def refresh_dashboard_data(self):
