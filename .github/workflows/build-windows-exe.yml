@@ -16,7 +16,7 @@ env:
 
 jobs:
   build:
-    runs-on: windows-2019  # 使用更稳定的Windows 2019镜像
+    runs-on: windows-2019
     timeout-minutes: 45
     
     steps:
@@ -27,7 +27,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'  # 使用更稳定的3.10版本
+        python-version: '3.10'
       timeout-minutes: 5
     
     - name: Display Python version
@@ -73,10 +73,10 @@ jobs:
     - name: Verify EXE exists
       run: |
         if (Test-Path "dist\发票归集软件-v${{ github.event.inputs.version }}.exe") {
-          Write-Host "EXE found successfully"
+          Write-Host "✓ EXE found successfully"
           Get-Item "dist\发票归集软件-v${{ github.event.inputs.version }}.exe" | Select-Object Name, Length
         } else {
-          Write-Error "EXE not found!"
+          Write-Error "✗ EXE not found!"
           Get-ChildItem -Path dist -Recurse | Format-Table
           exit 1
         }
@@ -89,10 +89,12 @@ jobs:
         if (Test-Path "README.md") { Copy-Item "README.md" -Destination "release\" -Force }
         if (Test-Path "CHANGELOG.md") { Copy-Item "CHANGELOG.md" -Destination "release\" -Force }
         if (Test-Path "BUILD_EXE_GUIDE.md") { Copy-Item "BUILD_EXE_GUIDE.md" -Destination "release\" -Force }
+        Write-Host "✓ Release package created"
       timeout-minutes: 2
     
     - name: List release contents
       run: |
+        Write-Host "Release package contents:"
         Get-ChildItem -Path release -Recurse | Format-Table Name, Length, LastWriteTime -AutoSize
       timeout-minutes: 2
     
@@ -101,35 +103,6 @@ jobs:
       with:
         name: 发票归集软件-v${{ github.event.inputs.version }}-windows
         path: release/
-        retention-days: 30
-      if: success()
-      timeout-minutes: 10
-    
-    - name: Create Draft Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v${{ github.event.inputs.version }}
-        name: 发票归集软件 v${{ github.event.inputs.version }}
-        draft: true
-        prerelease: false
-        files: |
-          release/发票归集软件-v${{ github.event.inputs.version }}.exe
-        body: |
-          ## 发票归集软件 v${{ github.event.inputs.version }}
-          
-          ### 下载说明
-          - 下载 `发票归集软件-v${{ github.event.inputs.version }}.exe` 即可使用
-          - 无需安装Python环境，直接运行即可
-          
-          ### 主要更新
-          - 详见 CHANGELOG.md
-          
-          ### 系统要求
-          - Windows 10 或更高版本
-          
-          ### 使用说明
-          - 详见 README.md
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      if: success()
+        retention-days: 90
+        if-no-files-found: error
       timeout-minutes: 10
