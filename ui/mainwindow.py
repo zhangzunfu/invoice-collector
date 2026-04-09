@@ -1091,7 +1091,7 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("发票归集软件 v2.0")
+        self.setWindowTitle("发票归集软件 v4.2")
         self.setGeometry(100, 100, 1400, 900)
         
         # 设置窗口图标（如果有的话）
@@ -1268,7 +1268,7 @@ class MainWindow(QMainWindow):
         
     def setup_table(self):
         """设置表格"""
-        headers = ['开票日期', '发票号码', '购方名称', '销方名称', '项目名称', '税率', '金额', '税额', '价税合计', '发票类型']
+        headers = ['开票日期', '发票号码', '购方名称', '销方名称', '项目名称', '税率', '金额', '税额', '价税合计', '发票类型', '来源']
         self.invoice_table.setColumnCount(len(headers))
         self.invoice_table.setHorizontalHeaderLabels(headers)
         
@@ -1284,6 +1284,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # 税额
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)  # 价税合计
         header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)  # 发票类型
+        header.setSectionResizeMode(10, QHeaderView.ResizeMode.ResizeToContents)  # 来源
         
     def select_folder(self):
         """选择文件夹"""
@@ -1379,6 +1380,7 @@ class MainWindow(QMainWindow):
             self.invoice_table.setItem(row, 7, QTableWidgetItem(str(invoice.get('税额', ''))))
             self.invoice_table.setItem(row, 8, QTableWidgetItem(str(invoice.get('价税合计', ''))))
             self.invoice_table.setItem(row, 9, QTableWidgetItem(invoice.get('发票类型', '')))
+            self.invoice_table.setItem(row, 10, QTableWidgetItem(invoice.get('文件路径', '')))
     
     def _analyze_data(self, ws):
         """分析Sheet1数据结构"""
@@ -1770,7 +1772,7 @@ class MainWindow(QMainWindow):
             if file_path:
                 try:
                     # 定义字段顺序，添加年份和月份字段
-                    column_order = ['开票日期', '发票号码', '购方名称', '销方名称', '项目名称', '税率', '金额', '税额', '价税合计', '发票类型', '年份', '月份']
+                    column_order = ['开票日期', '发票号码', '购方名称', '销方名称', '项目名称', '税率', '金额', '税额', '价税合计', '发票类型', '年份', '月份', '来源']
                     
                     # 确保每张发票都有所有字段，缺失的字段使用默认值
                     for invoice in self.current_invoices:
@@ -1782,6 +1784,8 @@ class MainWindow(QMainWindow):
                                     invoice[col] = '0.00%'
                                 elif col in ['年份', '月份']:
                                     invoice[col] = 0
+                                elif col == '来源':
+                                    invoice[col] = invoice.get('文件路径', '')
                                 else:
                                     invoice[col] = '未识别'
                         
@@ -1829,7 +1833,8 @@ class MainWindow(QMainWindow):
                         'I': 15,  # 价税合计
                         'J': 15,  # 发票类型
                         'K': 10,  # 年份
-                        'L': 10   # 月份
+                        'L': 10,  # 月份
+                        'M': 60   # 来源
                     }
                     
                     # 设置列宽
@@ -1866,10 +1871,13 @@ class MainWindow(QMainWindow):
                             
                             # 第7、8、9列（税率、金额、税额）和第10列（价税合计）右对齐
                             # 第11、12列（年份、月份）居中对齐
+                            # 第13列（来源）左对齐
                             if idx in [6, 7, 8, 9]:
                                 cell.alignment = Alignment(horizontal='right', vertical='center')
                             elif idx in [10, 11]:
                                 cell.alignment = Alignment(horizontal='center', vertical='center')
+                            elif idx == 13:
+                                cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
                             else:
                                 cell.alignment = data_alignment
                     

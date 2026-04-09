@@ -16,7 +16,7 @@ from ui.mainwindow import MainWindow
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("发票归集软件")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion("4.2.0")
     
     # 设置应用样式
     app.setStyle('Fusion')  # 使用Fusion风格以获得更好的跨平台外观
