@@ -1,7 +1,7 @@
 name: Build Windows EXE
 
 on:
-  workflow_dispatch:  # 允许在GitHub网页上手动触发
+  workflow_dispatch:
     inputs:
       version:
         description: '版本号 (例如: 4.2.0)'
@@ -9,92 +9,43 @@ on:
         default: '4.2.0'
 
 env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true  # 临时允许Node.js 20
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 30  # 设置超时时间
+    timeout-minutes: 30
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      timeout-minutes: 5
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-      timeout-minutes: 5
+        cache: 'pip'
     
-    - name: Upgrade pip
+    - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip --no-cache-dir
-      timeout-minutes: 5
-    
-    - name: Install core dependencies (retry on failure)
-      run: |
-        for i in {1..3}; do
-          pip install PyQt6 PyQt6-WebEngine --no-cache-dir && break || sleep 10
-        done
-      timeout-minutes: 15
-    
-    - name: Install data processing dependencies (retry on failure)
-      run: |
-        for i in {1..3}; do
-          pip install pandas openpyxl --no-cache-dir && break || sleep 10
-        done
-      timeout-minutes: 10
-    
-    - name: Install PDF parsing dependencies (retry on failure)
-      run: |
-        for i in {1..3}; do
-          pip install PyMuPDF --no-cache-dir && break || sleep 10
-        done
-      timeout-minutes: 10
-    
-    - name: Install PyInstaller
-      run: |
-        pip install pyinstaller --no-cache-dir
-      timeout-minutes: 5
-    
-    - name: Verify installations
-      run: |
-        python -c "import PyQt6; print('PyQt6 installed successfully')"
-        python -c "import pandas; print('pandas installed successfully')"
-        python -c "import fitz; print('PyMuPDF installed successfully')"
-        python -c "import PyInstaller; print('PyInstaller installed successfully')"
-      timeout-minutes: 3
+        pip install -r requirements.txt
+      continue-on-error: false
     
     - name: Build EXE with PyInstaller
       run: |
-        pyinstaller --onefile --windowed --name="发票归集软件-v${{ github.event.inputs.version }}" --clean app.py
-      timeout-minutes: 20
-    
-    - name: Verify EXE exists
-      run: |
-        if (Test-Path "dist\发票归集软件-v${{ github.event.inputs.version }}.exe") {
-          Write-Host "EXE build successful"
-          Get-Item "dist\发票归集软件-v${{ github.event.inputs.version }}.exe" | Select-Object Name, Length
-        } else {
-          Write-Error "EXE build failed - file not found"
-          exit 1
-        }
-      timeout-minutes: 3
+        pyinstaller --onefile --windowed --name="发票归集软件-v${{ github.event.inputs.version }}" app.py
     
     - name: Create release package
       run: |
         if (-not (Test-Path "release")) { mkdir release }
-        Copy-Item "dist\发票归集软件-v${{ github.event.inputs.version }}.exe" -Destination "release\"
-        Copy-Item "README.md" -Destination "release\" -ErrorAction SilentlyContinue
-        Copy-Item "CHANGELOG.md" -Destination "release\" -ErrorAction SilentlyContinue
-        Copy-Item "BUILD_EXE_GUIDE.md" -Destination "release\" -ErrorAction SilentlyContinue
-      timeout-minutes: 2
+        Copy-Item "dist\发票归集软件-v${{ github.event.inputs.version }}.exe" -Destination "release\" -Force
+        if (Test-Path "README.md") { Copy-Item "README.md" -Destination "release\" -Force }
+        if (Test-Path "CHANGELOG.md") { Copy-Item "CHANGELOG.md" -Destination "release\" -Force }
+        if (Test-Path "BUILD_EXE_GUIDE.md") { Copy-Item "BUILD_EXE_GUIDE.md" -Destination "release\" -Force }
     
     - name: List release contents
       run: |
-        Get-ChildItem -Path release -Recurse | Select-Object Name, Length
-      timeout-minutes: 2
+        Get-ChildItem -Path release -Recurse | Format-Table Name, Length, LastWriteTime
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -102,20 +53,17 @@ jobs:
         name: 发票归集软件-v${{ github.event.inputs.version }}-windows
         path: release/
         retention-days: 30
-      timeout-minutes: 10
+      if: success()
     
     - name: Create Draft Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: v${{ github.event.inputs.version }}
         name: 发票归集软件 v${{ github.event.inputs.version }}
-        draft: true  # 创建草稿，等待手动发布
+        draft: true
         prerelease: false
         files: |
           release/发票归集软件-v${{ github.event.inputs.version }}.exe
-          release/README.md
-          release/CHANGELOG.md
-          release/BUILD_EXE_GUIDE.md
         body: |
           ## 发票归集软件 v${{ github.event.inputs.version }}
           
@@ -133,4 +81,4 @@ jobs:
           - 详见 README.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      timeout-minutes: 10
+      if: success()
