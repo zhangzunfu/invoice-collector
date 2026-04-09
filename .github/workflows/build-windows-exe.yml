@@ -10,30 +10,77 @@ on:
 
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  PIP_INDEX_URL: https://pypi.org/simple
+  PIP_NO_CACHE_DIR: 1
+  PIP_DISABLE_PIP_VERSION_CHECK: 1
 
 jobs:
   build:
-    runs-on: windows-latest
-    timeout-minutes: 30
+    runs-on: windows-2019  # 使用更稳定的Windows 2019镜像
+    timeout-minutes: 45
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      timeout-minutes: 5
     
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
-        cache: 'pip'
+        python-version: '3.10'  # 使用更稳定的3.10版本
+      timeout-minutes: 5
+    
+    - name: Display Python version
+      run: |
+        python --version
+        pip --version
+      timeout-minutes: 2
+    
+    - name: Upgrade pip
+      run: |
+        python -m pip install --upgrade pip setuptools wheel --no-cache-dir
+      timeout-minutes: 5
     
     - name: Install dependencies
       run: |
-        pip install -r requirements.txt
-      continue-on-error: false
+        echo "Installing dependencies..."
+        pip install --no-cache-dir --timeout=300 --retries=2 PyQt6
+        pip install --no-cache-dir --timeout=300 --retries=2 PyQt6-WebEngine
+        pip install --no-cache-dir --timeout=300 --retries=2 pandas
+        pip install --no-cache-dir --timeout=300 --retries=2 openpyxl
+        pip install --no-cache-dir --timeout=300 --retries=2 PyMuPDF
+        pip install --no-cache-dir --timeout=300 --retries=2 pyinstaller
+        echo "Dependencies installed successfully"
+      timeout-minutes: 20
+    
+    - name: Verify installations
+      run: |
+        python -c "import PyQt6; print('PyQt6 OK')"
+        python -c "import PyQt6.QtWebEngineWidgets; print('PyQt6-WebEngine OK')"
+        python -c "import pandas; print('pandas OK')"
+        python -c "import openpyxl; print('openpyxl OK')"
+        python -c "import fitz; print('PyMuPDF OK')"
+        python -c "import PyInstaller; print('PyInstaller OK')"
+      timeout-minutes: 5
     
     - name: Build EXE with PyInstaller
       run: |
-        pyinstaller --onefile --windowed --name="发票归集软件-v${{ github.event.inputs.version }}" app.py
+        echo "Building EXE..."
+        pyinstaller --onefile --windowed --clean --noconfirm --name="发票归集软件-v${{ github.event.inputs.version }}" app.py
+        echo "EXE build completed"
+      timeout-minutes: 15
+    
+    - name: Verify EXE exists
+      run: |
+        if (Test-Path "dist\发票归集软件-v${{ github.event.inputs.version }}.exe") {
+          Write-Host "EXE found successfully"
+          Get-Item "dist\发票归集软件-v${{ github.event.inputs.version }}.exe" | Select-Object Name, Length
+        } else {
+          Write-Error "EXE not found!"
+          Get-ChildItem -Path dist -Recurse | Format-Table
+          exit 1
+        }
+      timeout-minutes: 2
     
     - name: Create release package
       run: |
@@ -42,10 +89,12 @@ jobs:
         if (Test-Path "README.md") { Copy-Item "README.md" -Destination "release\" -Force }
         if (Test-Path "CHANGELOG.md") { Copy-Item "CHANGELOG.md" -Destination "release\" -Force }
         if (Test-Path "BUILD_EXE_GUIDE.md") { Copy-Item "BUILD_EXE_GUIDE.md" -Destination "release\" -Force }
+      timeout-minutes: 2
     
     - name: List release contents
       run: |
-        Get-ChildItem -Path release -Recurse | Format-Table Name, Length, LastWriteTime
+        Get-ChildItem -Path release -Recurse | Format-Table Name, Length, LastWriteTime -AutoSize
+      timeout-minutes: 2
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -54,6 +103,7 @@ jobs:
         path: release/
         retention-days: 30
       if: success()
+      timeout-minutes: 10
     
     - name: Create Draft Release
       uses: softprops/action-gh-release@v1
@@ -82,3 +132,4 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       if: success()
+      timeout-minutes: 10
