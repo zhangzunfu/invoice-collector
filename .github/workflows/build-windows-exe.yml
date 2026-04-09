@@ -39,7 +39,7 @@ jobs:
         copy BUILD_EXE_GUIDE.md release\
     
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: 发票归集软件-v${{ github.event.inputs.version }}-windows
         path: release/
